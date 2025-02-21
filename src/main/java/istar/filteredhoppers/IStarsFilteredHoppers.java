@@ -12,6 +12,7 @@ public class IStarsFilteredHoppers implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		ModBlocks.register();
+		ModBlockEntities.register();
 		ModScreenHandlers.register();
 		LOGGER.info("IStars Filtered Hoppers Mod Initialized!");
 	}

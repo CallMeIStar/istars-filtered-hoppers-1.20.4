@@ -18,9 +18,6 @@ public class AdvancedHopperScreenHandler extends ScreenHandler {
     public AdvancedHopperScreenHandler(int syncId, PlayerInventory playerInventory, AdvancedHopperBlockEntity inventory) {
         super(ModScreenHandlers.ADVANCED_HOPPER_SCREEN_HANDLER, syncId);
         this.inventory = inventory;
-
-        LOGGER.info("AdvancedHopperScreenHandler constructed. Sync ID: {}", syncId);
-
         for (int i = 0; i < 5; i++) {
             this.addSlot(new Slot(inventory, i, 44 + i * 18, 20) {
                 @Override

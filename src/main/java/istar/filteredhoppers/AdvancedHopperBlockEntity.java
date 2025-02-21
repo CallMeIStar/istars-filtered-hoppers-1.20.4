@@ -1,18 +1,17 @@
 package istar.filteredhoppers;
 
-import istar.filteredhoppers.AdvancedHopperScreenHandler;
-import istar.filteredhoppers.ModBlockEntities;
 import net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerFactory;
-import net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerType;
+import net.fabricmc.fabric.api.transfer.v1.item.ItemStorage;
+import net.fabricmc.fabric.api.transfer.v1.item.ItemVariant;
+import net.fabricmc.fabric.api.transfer.v1.storage.Storage;
+import net.fabricmc.fabric.api.transfer.v1.storage.StorageView;
+import net.fabricmc.fabric.api.transfer.v1.transaction.Transaction;
+import net.minecraft.block.HopperBlock;
 import net.minecraft.block.BlockState;
-import net.minecraft.block.entity.BlockEntity;
-import net.minecraft.block.entity.BlockEntityType;
-import net.minecraft.block.entity.Hopper;
 import net.minecraft.block.entity.HopperBlockEntity;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.inventory.Inventories;
 import net.minecraft.inventory.Inventory;
 import net.minecraft.inventory.SidedInventory;
 import net.minecraft.item.ItemStack;
@@ -20,7 +19,6 @@ import net.minecraft.item.Items;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.registry.tag.ItemTags;
-import net.minecraft.screen.NamedScreenHandlerFactory;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
@@ -32,17 +30,27 @@ import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.IntStream;
 
-public class AdvancedHopperBlockEntity extends HopperBlockEntity implements SidedInventory {
+public class AdvancedHopperBlockEntity extends HopperBlockEntity implements SidedInventory, ExtendedScreenHandlerFactory {
+    private static final int FILTER_SLOT = 5;
+    private int transferCooldown = -1;
+    private long lastTickTime;
     private static final Logger LOGGER = LoggerFactory.getLogger("AdvancedHopperBlockEntity");
 
     public AdvancedHopperBlockEntity(BlockPos pos, BlockState state) {
         super(pos, state);
-        LOGGER.info("Creating AdvancedHopperBlockEntity at {}", pos);
-        this.setInvStackList(DefaultedList.ofSize(6, ItemStack.EMPTY)); // Inventory size 6
+        this.setInvStackList(DefaultedList.ofSize(6, ItemStack.EMPTY));
+    }
+
+    private boolean needsCooldown() {
+        return this.transferCooldown > 0;
+    }
+
+    private void setTransferCooldown(int cooldown) {
+        this.transferCooldown = cooldown;
     }
 
     @Override
@@ -50,44 +58,157 @@ public class AdvancedHopperBlockEntity extends HopperBlockEntity implements Side
         return 6;
     }
 
+    @Override
+    public void readNbt(NbtCompound nbt) {
+        super.readNbt(nbt);
+        LOGGER.info("NBT Data Loaded: {}", nbt);
+    }
+
+    @Override
+    protected void writeNbt(NbtCompound nbt) {
+        super.writeNbt(nbt);
+        LOGGER.info("NBT Data Saved: {}", nbt);
+    }
+
     public static void serverTick(World world, BlockPos pos, BlockState state, AdvancedHopperBlockEntity blockEntity) {
-        if (!world.isClient) {
-            LOGGER.info("Hopper checking for items at {}", pos);
+        blockEntity.transferCooldown--;
+        blockEntity.lastTickTime = world.getTime();
 
-            List<ItemEntity> items = world.getEntitiesByClass(ItemEntity.class,
-                    new Box(pos.getX(), pos.getY() + 1, pos.getZ(), pos.getX() + 1, pos.getY() + 2, pos.getZ() + 1),
-                    item -> !item.isRemoved() && item.getStack() != null);
-
-            LOGGER.info("Found {} items above the hopper", items.size());
-
-            blockEntity.transferItems();
+        if (!blockEntity.needsCooldown()) {
+            blockEntity.setTransferCooldown(0);
+            blockEntity.tick(world, pos, state);
         }
     }
 
-
-    public void transferItems() {
-        List<ItemEntity> items = world.getEntitiesByClass(ItemEntity.class,
-                new Box(pos.getX(), pos.getY() + 1, pos.getZ(), pos.getX() + 1, pos.getY() + 2, pos.getZ() + 1),
-                item -> !item.isRemoved() && item.getStack() != null);
-
-        for (ItemEntity itemEntity : items) {
-            ItemStack stack = itemEntity.getStack();
-            if (!stack.isEmpty() && canAcceptItem(stack)) {
-                for (int i = 0; i < size(); i++) {
-                    if (getStack(i).isEmpty()) {
-                        setStack(i, stack.copy());
-                        itemEntity.discard();
-                        break;  // Stop after picking one item per tick
-                    }
-                }
+    private void tick(World world, BlockPos pos, BlockState state) {
+        if (!world.isClient && state.get(HopperBlock.ENABLED)) {
+            boolean transferred = false;
+            transferred = extractFromWorld(world);
+            if (!this.isEmpty()) {
+                transferred |= insertIntoInventory(world, pos, state);
+            }
+            if (transferred) {
+                LOGGER.info("Item transfer successful at {}", pos);
+                this.setTransferCooldown(8);
+                this.markDirty();
             }
         }
     }
 
-    @Override
-    public BlockEntityType<?> getType() {
-        return ModBlockEntities.ADVANCED_HOPPER_BLOCK_ENTITY;
+    private boolean insertIntoInventory(World world, BlockPos pos, BlockState state) {
+        Direction hopperFacing = state.get(HopperBlock.FACING);
+        Optional<Storage<ItemVariant>> destination = getItemStorage(world, pos.offset(hopperFacing), hopperFacing.getOpposite());
+
+        if (destination.isEmpty()) return false;
+
+        Storage<ItemVariant> storage = destination.get();
+        boolean transferred = false;
+
+        try (Transaction transaction = Transaction.openOuter()) {
+            for (int i = 0; i < 5; i++) {
+                ItemStack stack = this.getStack(i);
+                if (!stack.isEmpty()) {
+                    long inserted = storage.insert(ItemVariant.of(stack), stack.getCount(), transaction);
+                    if (inserted > 0) {
+                        stack.decrement((int) inserted);
+                        transferred = true;
+                        if (stack.isEmpty()) {
+                            this.setStack(i, ItemStack.EMPTY);
+                        }
+                    }
+                }
+            }
+            transaction.commit();
+        }
+
+        return transferred;
     }
+
+    private boolean extractFromWorld(World world) {
+        Optional<Storage<ItemVariant>> source = getItemStorage(world, this.getPos().up(), Direction.DOWN);
+        if (source.isPresent()) {
+            return extractFromInventory(source.get());
+        }
+        return extractFromItemEntities(world);
+    }
+
+    private boolean extractFromInventory(Storage<ItemVariant> storage) {
+        boolean extracted = false;
+        try (Transaction transaction = Transaction.openOuter()) {
+            for (StorageView<ItemVariant> slot : storage.nonEmptyViews()) {
+                if (slot.isResourceBlank() || slot.getAmount() <= 0) continue;
+                ItemStack extractedItem = slot.getResource().toStack(1);
+
+                for (int j = 0; j < 5; j++) {
+                    if (this.canInsert(j, extractedItem, Direction.DOWN)) {
+                        ItemStack destStack = this.getStack(j);
+                        if (destStack.isEmpty()) {
+                            this.setStack(j, extractedItem);
+                        } else {
+                            destStack.increment(1);
+                        }
+                        storage.extract(slot.getResource(), 1, transaction);
+                        extracted = true;
+                        break;
+                    }
+                }
+            }
+            if (extracted) transaction.commit();
+            else transaction.abort();
+        }
+        return extracted;
+    }
+
+    private boolean extractFromItemEntities(World world) {
+        Box detectionBox = new Box(getHopperX() - 0.5, getHopperY(), getHopperZ() - 0.5,
+                getHopperX() + 0.5, getHopperY() + 1.5, getHopperZ() + 0.5);
+        List<ItemEntity> items = world.getEntitiesByClass(ItemEntity.class, detectionBox, e -> canAcceptItem(e.getStack()));
+
+        for (ItemEntity item : items) {
+            ItemStack itemStack = item.getStack();
+            for (int slot = 0; slot < 5; slot++) {
+                if (this.canInsert(slot, itemStack, Direction.DOWN)) {
+                    ItemStack destStack = this.getStack(slot);
+                    if (destStack.isEmpty()) {
+                        this.setStack(slot, itemStack);
+                        item.discard();
+                        return true;
+                    } else if (destStack.getCount() < destStack.getMaxCount()) {
+                        destStack.increment(1);
+                        itemStack.decrement(1);
+                        if (itemStack.isEmpty()) item.discard();
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private Optional<Storage<ItemVariant>> getItemStorage(World world, BlockPos pos, Direction direction) {
+        return Optional.ofNullable(ItemStorage.SIDED.find(world, pos, direction));
+    }
+
+    public boolean canAcceptItem(ItemStack stack) {
+        ItemStack filter = this.getStack(FILTER_SLOT);
+        return filter.isOf(Items.WOODEN_SWORD) ? stack.isIn(ItemTags.LOGS) : true;
+    }
+
+    @Override
+    public int[] getAvailableSlots(Direction side) {
+        return side == Direction.DOWN ? new int[]{0, 1, 2, 3, 4} : new int[]{0, 1, 2, 3, 4, FILTER_SLOT};
+    }
+
+    @Override
+    public boolean canInsert(int slot, ItemStack stack, Direction dir) {
+        return slot != FILTER_SLOT && canAcceptItem(stack);
+    }
+
+    @Override
+    public boolean canExtract(int slot, ItemStack stack, Direction dir) {
+        return slot != FILTER_SLOT;
+    }
+
     @Override
     public Text getDisplayName() {
         return Text.translatable("container.advanced_hopper");
@@ -99,48 +220,8 @@ public class AdvancedHopperBlockEntity extends HopperBlockEntity implements Side
         return new AdvancedHopperScreenHandler(syncId, playerInventory, this);
     }
 
-    // Override SidedInventory methods to enforce filter
     @Override
-    public int[] getAvailableSlots(Direction side) {
-        return side == Direction.DOWN ? new int[]{0, 1, 2, 3, 4} : IntStream.range(0, 6).toArray();
-    }
-
-    @Override
-    public boolean canInsert(int slot, ItemStack stack, Direction dir) {
-        if (slot == 5) {
-            return stack.isOf(Items.WOODEN_SWORD); // Filter slot only accepts wooden swords
-        } else if (slot < 5) {
-            ItemStack filter = getStack(5);
-            if (filter.getItem() == Items.WOODEN_SWORD) {
-                return stack.isIn(ItemTags.LOGS); // Only allow logs if filter is present
-            }
-            return true; // Accept any item if no filter
-        }
-        return false;
-    }
-
-    @Override
-    public boolean canExtract(int slot, ItemStack stack, Direction dir) {
-        return slot < 5; // Allow extracting from main slots
-    }
-
-    // Handle NBT data for additional slot
-    @Override
-    public void readNbt(NbtCompound nbt) {
-        super.readNbt(nbt);
-        // Additional data if needed
-    }
-
-    @Override
-    protected void writeNbt(NbtCompound nbt) {
-        super.writeNbt(nbt);
-        // Additional data if needed
-    }
-    public boolean canAcceptItem(ItemStack stack) {
-        ItemStack filter = this.getStack(5); // Get the filter item from slot 5
-        if (filter.getItem() == Items.WOODEN_SWORD) {
-            return stack.isIn(ItemTags.LOGS); // Only allow logs if the filter is a wooden sword
-        }
-        return true; // Allow all items if no filter is present
+    public void writeScreenOpeningData(ServerPlayerEntity player, PacketByteBuf buf) {
+        buf.writeBlockPos(this.pos);
     }
 }

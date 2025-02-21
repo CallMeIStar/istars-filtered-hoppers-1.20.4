@@ -21,24 +21,19 @@ public class AdvancedHopperScreen extends HandledScreen<AdvancedHopperScreenHand
     public AdvancedHopperScreen(AdvancedHopperScreenHandler handler, PlayerInventory inventory, Text title) {
         super(handler, inventory, title);
         this.playerInventory = inventory;
-        LOGGER.info("AdvancedHopperScreen constructed. Texture: {}", TEXTURE); // Log texture identifier
     }
 
     @Override
     protected void init() {
         super.init();
-        LOGGER.info("AdvancedHopperScreen initialized. x: {}, y: {}, backgroundWidth: {}, backgroundHeight: {}", x, y, backgroundWidth, backgroundHeight);
     }
 
     @Override
     protected void drawBackground(DrawContext context, float delta, int mouseX, int mouseY) {
         try {
             RenderSystem.setShaderTexture(0, TEXTURE);
-            LOGGER.debug("Attempting to bind texture: {}", TEXTURE);
             context.drawTexture(TEXTURE, x, y, 0, 0, backgroundWidth, backgroundHeight);
-            LOGGER.debug("Texture drawn successfully.");
         } catch (Exception e) {
-            LOGGER.error("Error loading texture {}: {}", TEXTURE, e.getMessage(), e);
         }
     }
 

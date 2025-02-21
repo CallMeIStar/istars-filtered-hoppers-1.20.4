@@ -21,7 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class AdvancedHopperBlock extends HopperBlock implements InventoryProvider {
-    private static final Logger LOGGER = LoggerFactory.getLogger("AdvancedHopperBlock");
+    private static final Logger LOGGER = LoggerFactory.getLogger("AdvancedHopperBlock-Ticker");
 
     public AdvancedHopperBlock(Settings settings) {
         super(settings);
@@ -67,9 +67,11 @@ public class AdvancedHopperBlock extends HopperBlock implements InventoryProvide
 
     @Override
     public <T extends BlockEntity> BlockEntityTicker<T> getTicker(World world, BlockState state, BlockEntityType<T> type) {
-        LOGGER.info("Attempting to create ticker for {}", type);
-
-        return world.isClient ? null :
-                validateTicker(type, ModBlockEntities.ADVANCED_HOPPER_BLOCK_ENTITY, AdvancedHopperBlockEntity::serverTick);
+        return validateTicker(
+                type,
+                ModBlockEntities.ADVANCED_HOPPER_BLOCK_ENTITY,
+                (world1, pos, state1, blockEntity) ->
+                        AdvancedHopperBlockEntity.serverTick(world1, pos, state1, (AdvancedHopperBlockEntity) blockEntity)
+        );
     }
 }

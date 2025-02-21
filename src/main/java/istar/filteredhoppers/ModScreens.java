@@ -9,9 +9,7 @@ public class ModScreens {
     public static void register() {
         try {
             HandledScreens.register(ModScreenHandlers.ADVANCED_HOPPER_SCREEN_HANDLER, AdvancedHopperScreen::new);
-            IStarsFilteredHoppers.LOGGER.info("Advanced Hopper Screen Registered!");
         } catch (Exception e) {
-            IStarsFilteredHoppers.LOGGER.error("Error registering screen: {}", e.getMessage(), e); // Log any exceptions
         }
     }
 }
