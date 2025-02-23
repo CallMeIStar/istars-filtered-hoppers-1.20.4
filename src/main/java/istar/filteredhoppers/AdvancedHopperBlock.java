@@ -67,11 +67,6 @@ public class AdvancedHopperBlock extends HopperBlock implements InventoryProvide
 
     @Override
     public <T extends BlockEntity> BlockEntityTicker<T> getTicker(World world, BlockState state, BlockEntityType<T> type) {
-        return validateTicker(
-                type,
-                ModBlockEntities.ADVANCED_HOPPER_BLOCK_ENTITY,
-                (world1, pos, state1, blockEntity) ->
-                        AdvancedHopperBlockEntity.serverTick(world1, pos, state1, (AdvancedHopperBlockEntity) blockEntity)
-        );
+        return world.isClient ? null : validateTicker(type, ModBlockEntities.ADVANCED_HOPPER_BLOCK_ENTITY, AdvancedHopperBlockEntity::tick);
     }
 }
